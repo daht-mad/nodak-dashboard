@@ -109,6 +109,13 @@ a.lk{display:block;color:inherit;text-decoration:none;border-radius:8px}a.lk:hov
 .sk-doc table{border-collapse:collapse;font-size:13px;margin:10px 0;display:block;overflow:auto}.sk-doc th,.sk-doc td{border:1px solid var(--line);padding:5px 9px;text-align:left}.sk-doc th{background:#F6F4EE;font-weight:600}
 .sk-doc hr{border:0;border-top:1px dashed var(--line);margin:18px 0}.sk-doc a{color:var(--ink)}
 @media(max-width:820px){.sk{grid-template-columns:minmax(0,1fr)}.sk-side{position:static;max-height:240px}.sk-flow{padding:22px 18px 30px}}
+/* 문자 */
+.sms{border-top:1px dashed var(--line)}.sms:first-child{border-top:0}
+.sms summary{list-style:none;display:flex;gap:10px;align-items:center;padding:9px 0;cursor:pointer}.sms summary::-webkit-details-marker{display:none}
+.sms summary .m{flex:1;min-width:0}.sms summary b{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sms summary small{color:var(--gray);font-size:12px}
+.sms[open] summary b{white-space:normal}
+.sms-body{padding:0 0 12px 4px}.sms-body pre{white-space:pre-wrap;font:inherit;font-size:13px;background:#F6F4EE;border-radius:10px;padding:10px 12px;margin:0 0 8px;line-height:1.6}
+.sms-fail{color:var(--bad);font-size:12.5px;margin:8px 0 0}
 /* 일기장 */
 .pd{margin:0 0 14px;border:1.5px solid var(--ink);border-radius:14px;overflow:hidden;background:#fff}.pd img{display:block;width:100%;max-height:520px;object-fit:contain;background:#f6f3ec}.pd figcaption{padding:10px 14px;font-size:13.5px;line-height:1.6}.pd figcaption b{display:block;font-weight:600}.pd figcaption span{color:var(--gray)}
 .cal .c .pic{position:absolute;top:6px;right:7px;width:7px;height:7px;border-radius:50%;background:#e9a23b}
@@ -268,7 +275,11 @@ function diary() {
 function sms() {
   const s = D.solapi || {};
   if (s.error) return `<p class="empty">${esc(s.error)}</p>`;
-  return `<div class="box">${(s.list || []).map((m) => `<div class="li"><span class="lbl ${m.ok ? 'ok' : 'bad'}">${m.ok ? '도착' : '실패'}</span><div class="m">${esc(m.to)}<small>${esc(m.type)}${m.msg ? ` · ${esc(m.msg)}` : ''}</small></div><span class="w">${ago(m.at)}</span></div>`).join('') || '<p class="empty">보낸 문자가 없어</p>'}</div>`;
+  const list = s.list || [];
+  if (!list.length) return '<p class="empty">보낸 문자가 없어</p>';
+  return `<p style="color:var(--gray);font-size:13px;margin:0 0 12px">같은 내용으로 보낸 문자는 한 줄로 묶었어 · 최근 200건 기준 · 줄을 누르면 내용과 받은 사람</p>
+  <div class="box">${list.map((g) => `<details class="sms"><summary><span class="lbl ${g.fail ? 'bad' : 'ok'}">${g.fail ? `실패 ${g.fail}` : '모두 도착'}</span><div class="m"><b>${esc(g.title || '(내용 없음)')}</b><small>${esc(g.type)} · ${g.to.length}명에게${g.fail ? ` · 도착 ${g.ok}` : ''}</small></div><span class="w">${ago(g.at)}</span></summary>
+    <div class="sms-body"><pre>${esc(g.text)}</pre><div class="chips">${g.to.map((t) => `<span>${esc(t)}</span>`).join('')}</div>${g.fails.length ? `<p class="sms-fail">${g.fails.map(esc).join('<br>')}</p>` : ''}</div></details>`).join('')}</div>`;
 }
 
 function draw() {

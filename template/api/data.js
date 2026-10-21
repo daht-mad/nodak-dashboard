@@ -74,15 +74,25 @@ async function solapi() {
   if (!E.SOLAPI_API_KEY || !E.SOLAPI_API_SECRET) return { off: true };
   const date = new Date().toISOString(), salt = crypto.randomBytes(16).toString('hex');
   const signature = crypto.createHmac('sha256', E.SOLAPI_API_SECRET).update(date + salt).digest('hex');
-  const r = await fetch('https://api.solapi.com/messages/v4/list?limit=20', {
+  const r = await fetch('https://api.solapi.com/messages/v4/list?limit=200', {
     headers: { Authorization: `HMAC-SHA256 apiKey=${E.SOLAPI_API_KEY}, date=${date}, salt=${salt}, signature=${signature}` },
   });
   if (!r.ok) return { error: `솔라피 ${r.status}` };
   const j = await r.json();
-  const list = Object.values(j.messageList || {}).map((m) => ({
-    at: m.dateCreated, type: m.type, to: String(m.to || '').replace(/^(\d{3})\d+(\d{4})$/, '$1-****-$2'), // 번호는 가려서
-    status: m.statusCode, msg: m.statusMessage || '', ok: m.statusCode === '4000',
-  }));
+  const mask = (t) => String(t || '').replace(/^(\d{3})\d+(\d{4})$/, '$1-****-$2');
+  const hide = (t) => String(t || '').replace(/01[016789][-. ]?\d{3,4}[-. ]?\d{4}/g, '010-****-****');
+  // 같은 내용끼리 한 줄로 — 제목(LMS) 또는 첫 줄이 같으면 한 번의 발송으로 본다 (닿 10/21 「무슨 내용으로 N명에게」)
+  const groups = {};
+  for (const m of Object.values(j.messageList || {})) {
+    const first = String(m.text || '').split('\n').find((l) => l.trim()) || '';
+    const title = (m.subject || first).trim().replace(/\d{4,}/g, '●●●●').slice(0, 60); // 인증번호 같은 숫자는 가리고, 숫자만 다른 문자는 한 줄로
+    const k = title + '|' + m.type;
+    const g = (groups[k] ||= { title, type: m.type, text: hide(m.text).replace(/\d{6}/g, '●●●●●●').slice(0, 1000), to: [], ok: 0, fail: 0, at: m.dateCreated, fails: [] });
+    g.to.push(mask(m.to));
+    if (m.statusCode === '4000') g.ok++; else { g.fail++; g.fails.push(`${mask(m.to)} ${m.statusMessage || m.reason || m.statusCode || ''}`.trim()); }
+    if (String(m.dateCreated) > String(g.at)) g.at = m.dateCreated;
+  }
+  const list = Object.values(groups).sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 30);
   return { list };
 }
 
