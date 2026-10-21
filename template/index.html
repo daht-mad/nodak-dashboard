@@ -89,6 +89,8 @@ a.lk{display:block;color:inherit;text-decoration:none;border-radius:8px}a.lk:hov
 .drawer .knob{position:absolute;top:7px;left:50%;width:26px;height:5px;margin-left:-13px;border-radius:3px;background:var(--house);border:1px solid var(--ink)}
 .drawer b{font-size:13.5px;font-weight:600;word-break:break-all}.drawer small{color:var(--gray);font-size:11.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.drawer .lbl{align-self:flex-start}
 /* 일기장 */
+.pd{margin:0 0 14px;border:1.5px solid var(--ink);border-radius:14px;overflow:hidden;background:#fff}.pd img{display:block;width:100%;max-height:520px;object-fit:contain;background:#f6f3ec}.pd figcaption{padding:10px 14px;font-size:13.5px;line-height:1.6}.pd figcaption b{display:block;font-weight:600}.pd figcaption span{color:var(--gray)}
+.cal .c .pic{position:absolute;top:6px;right:7px;width:7px;height:7px;border-radius:50%;background:#e9a23b}
 .diary{display:grid;grid-template-columns:330px minmax(0,1fr);gap:16px}
 .mhead{display:flex;align-items:center;gap:10px;margin-bottom:10px}.mhead b{font-size:16px}.mhead button{border:1.5px solid var(--ink);background:#fff;border-radius:999px;width:28px;height:28px;font-weight:700}
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
@@ -222,19 +224,24 @@ function bookPaging() { // 두 쪽이 넘치면 「다음 쪽」
 
 function diary() {
   if (D.diary?.off) return '<p class="empty">AIRTABLE_TOKEN · AIRTABLE_BASE 를 넣으면 켜져</p>';
-  const days = D.diary?.days || []; if (!days.length) return '<p class="empty">아직 올라온 일기가 없어 — 봇에게 「관리실에 내 기록 올려줘」</p>';
+  const pics = Object.fromEntries((PT().diary?.rows || []).filter((r) => r.image).map((r) => [r.date, r])); // 마을 그림일기
+  const mem = D.diary?.days || [];
+  const allDates = [...new Set([...mem.map((d) => d.date), ...Object.keys(pics)])].sort().reverse();
+  if (!allDates.length) return '<p class="empty">아직 올라온 일기가 없어 — 봇에게 「작업실에 내 기록 올려줘」</p>';
+  const days = allDates.map((dt) => mem.find((d) => d.date === dt) || { date: dt, heads: [], key: '' });
   const by = Object.fromEntries(days.map((d) => [d.date, d]));
   if (!DAYSEL) { DAYSEL = days[0].date; MONTH = DAYSEL.slice(0, 7); }
   const [y, m] = MONTH.split('-').map(Number), first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(), n = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const maxH = Math.max(1, ...days.map((d) => d.heads.length));
-  const cells = [...Array(first).fill('<span class="c x"></span>'), ...Array.from({ length: n }, (_, i) => { const d = `${MONTH}-${String(i + 1).padStart(2, '0')}`, x = by[d]; return `<button class="c ${x ? 'has' : ''} ${d === DAYSEL ? 'on' : ''}" ${x ? `data-day="${d}"` : 'disabled'}>${i + 1}${x ? `<i style="opacity:${0.35 + 0.65 * Math.min(1, x.heads.length / maxH)}"></i>` : ''}</button>`; })];
+  const cells = [...Array(first).fill('<span class="c x"></span>'), ...Array.from({ length: n }, (_, i) => { const d = `${MONTH}-${String(i + 1).padStart(2, '0')}`, x = by[d]; return `<button class="c ${x ? 'has' : ''} ${d === DAYSEL ? 'on' : ''}" ${x ? `data-day="${d}"` : 'disabled'}>${i + 1}${pics[d] ? '<b class="pic"></b>' : ''}${x && x.heads.length ? `<i style="opacity:${0.35 + 0.65 * Math.min(1, x.heads.length / maxH)}"></i>` : ''}</button>`; })];
   const sel = by[DAYSEL], got = sel && cache[sel.key];
-  if (sel && !got) fetch(`/api/data?day=${encodeURIComponent(sel.key)}`).then((r) => r.json()).then((j) => { cache[sel.key] = j; draw(); });
+  if (sel && sel.key && !got) fetch(`/api/data?day=${encodeURIComponent(sel.key)}`).then((r) => r.json()).then((j) => { cache[sel.key] = j; draw(); });
   const wd = '일월화수목금토'[new Date(DAYSEL + 'T00:00:00Z').getUTCDay()];
   return `<div class="diary"><div><div class="mhead"><button data-mon="-1">‹</button><b>${y}년 ${m}월</b><button data-mon="1">›</button><span style="margin-left:auto;color:var(--gray);font-size:12.5px">기록한 날 ${days.filter((d) => d.date.startsWith(MONTH)).length}일</span></div>
     <div class="cal">${'일월화수목금토'.split('').map((d) => `<span class="h">${d}</span>`).join('')}${cells.join('')}</div>
     ${sel ? `<div style="margin-top:14px;font-weight:700">${Number(DAYSEL.slice(5, 7))}월 ${Number(DAYSEL.slice(8))}일 (${wd}) · 큰 일 ${sel.heads.length}개</div><div class="chips2">${sel.heads.map((h) => `<span>${esc(h)}</span>`).join('')}</div>` : ''}</div>
-    <div class="note">${sel ? (got ? md(got['내용']) : '여는 중…') : '날짜를 골라 줘'}</div></div>`;
+    <div>${pics[DAYSEL] ? `<figure class="pd"><img src="${esc(pics[DAYSEL].image)}" alt="" loading="lazy"></figure>` : ''}
+    ${sel && sel.key ? `<div class="note">${got ? md(got['내용']) : '여는 중…'}</div>` : sel && pics[DAYSEL] ? '' : '<div class="note">날짜를 골라 줘</div>'}</div></div>`;
 }
 
 function sms() {

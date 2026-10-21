@@ -34,7 +34,7 @@ async function village() {
   if (!E.VILLAGE_KEY) return { off: true };
   const r = await fetch(`${VILLAGE_URL}/api/village?sit`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ op: 'house-data', part: 'home', key: E.VILLAGE_KEY }), // part 하나 = 지금 라이브 마을 서버 그대로 (Airtable 4번)
+    body: JSON.stringify({ op: 'house-data', parts: ['home', 'diary'], limit: 200, key: E.VILLAGE_KEY }), // 우리 집 겉모습 + 그림일기(일기장에 같이)
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) return { error: j.error || `마을 ${r.status}` };
