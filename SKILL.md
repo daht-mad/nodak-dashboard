@@ -14,7 +14,8 @@ description: 작업실 만들어줘, 내 봇 대시보드, 작업실에 내 기�
 | 오늘 · 할 일 · 대화 · 스킬 | 봇이 올린 `봇상태` 표(크론·세션·스킬) |
 | 일기장 | `봇일기` 표 — OpenClaw는 `memory/날짜.md`, Hermes는 그날 대화 제목(세션)으로 엮음 |
 | 책장 | `봇책장` 표 — SOUL·IDENTITY·AGENTS (Hermes: SOUL·MEMORY·.hermes.md). **USER.md(집사 정보)는 기본으로 안 올림** |
-| 문자 | 솔라피 키가 있을 때만 |
+| 사용량 | claude-cli 봇만 — `~/.claude/projects/<워크스페이스>/*.jsonl` 의 호출별 토큰을 하루씩 합침(API 키·Hermes 봇은 탭이 안 뜸) |
+| 문자 | 솔라피 키가 있을 때만 — 같은 내용끼리 묶어 「N명에게 · 실패 M」 |
 
 ## 1. 표 3개 만들기 (처음 한 번 · 내 에어테이블 스킬로)
 
