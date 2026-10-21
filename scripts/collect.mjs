@@ -60,6 +60,9 @@ const DAYS = Number(flag('--days', '60'));
 const WANT_BOOKS = flag('--books', process.env.DASH_BOOKS || 'SOUL,IDENTITY,AGENTS').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
 const BOOK_NAME = { SOUL: '영혼', IDENTITY: '이름표', AGENTS: '약속', USER: '집사', MEMORY: '기억', TOOLS: '연장통' };
 
+// 크론 실패 글에 로그 파일 경로가 있으면 그 끝 8줄 (이 컴퓨터에 남아 있을 때만, 가려서)
+const logTail = (s) => { const p = (s.match(/(\/tmp\/[^\s)]+\.log)/) || [])[1]; if (!p || !existsSync(p)) return ''; try { return scrub(readFileSync(p, 'utf8').trim().split('\n').slice(-8).join('\n')).slice(-900); } catch { return ''; } };
+
 // ═══ OpenClaw
 async function openclaw() {
   const agent = flag('--agent') || process.env.DASH_AGENT || '';
@@ -91,6 +94,13 @@ async function openclaw() {
       schedule: j.schedule?.expr || (j.schedule?.everyMs ? `${Math.round(j.schedule.everyMs / 60000)}분마다` : j.schedule?.at || ''),
       status: st.lastRunStatus || '', lastAt: st.lastRunAtMs || 0, nextAt: st.nextRunAtMs || 0, errors: st.consecutiveErrors || 0,
       note: st.lastRunStatus === 'error' ? scrub(String(st.lastDiagnosticSummary || st.lastError || '')).slice(0, 200) : '',
+      // 눌렀을 때 보일 것 (닿 10/21 「눌러서 내용을 확인하든 설명이 있든」) — 무슨 일 · 언제 · 결과 가는 곳 · 왜 멈췄나(로그 끝 몇 줄)
+      desc: scrub(String(j.description || j.displayName || '')).slice(0, 200),
+      what: scrub(j.payload?.kind === 'command' ? (j.payload.argv || []).slice(-1)[0] || '' : String(j.payload?.message || j.payload?.text || '')).slice(0, 400),
+      how: j.payload?.kind === 'command' ? '명령' : j.payload?.kind === 'systemEvent' ? '알림' : '봇에게 부탁',
+      tz: j.schedule?.tz || '', to: j.delivery?.mode === 'none' ? '' : [j.delivery?.channel, j.delivery?.to].filter(Boolean).join(' '),
+      took: st.lastDurationMs || 0, error: st.lastRunStatus === 'error' ? scrub(String(st.lastError || '')).slice(0, 200) : '',
+      log: st.lastRunStatus === 'error' ? logTail(String(st.lastDiagnosticSummary || '')) : '',
     };
   });
   const kj = await oc(['skills', 'list', ...A]);
@@ -227,6 +237,7 @@ async function hermes() {
       schedule: String(pick(j, 'schedule', 'cron', 'expr') || ''), status: bad ? 'error' : st ? 'ok' : '',
       lastAt: ms(pick(j, 'last_run_at', 'last_run')), nextAt: ms(pick(j, 'next_run_at', 'next_run')), errors: Number(pick(j, 'consecutive_failures', 'failures') || 0),
       note: bad ? scrub(String(pick(j, 'last_error', 'error') || st)).slice(0, 200) : '',
+      what: scrub(String(pick(j, 'prompt', 'command', 'task') || '')).slice(0, 400), how: '봇에게 부탁', desc: '', to: String(pick(j, 'deliver', 'deliver_to') || ''),
     };
   });
   const sd = path.join(H, 'skills');
