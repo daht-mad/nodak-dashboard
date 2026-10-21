@@ -122,7 +122,47 @@ async function openclaw() {
   const mdir = path.join(ws, 'memory'), since = new Date(now - DAYS * DAY).toISOString().slice(0, 10);
   const diary = (existsSync(mdir) ? readdirSync(mdir) : []).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f) && f.slice(0, 10) >= since)
     .map((f) => { const text = readIf(path.join(mdir, f)); return { date: f.slice(0, 10), heads: heads(text), text }; });
-  return { agent: agent || 'default', kind: 'openclaw', sessions: sessionOut, cron, skills: skillOut, books, diary, skillDocs };
+  const usage = await claudeUsage(ws, sessions, sessionOut.recent, short);
+  return { agent: agent || 'default', kind: 'openclaw', sessions: sessionOut, cron, skills: skillOut, books, diary, skillDocs, usage };
+}
+
+// 사용량 — claude-cli 로 도는 봇은 Claude 대화 기록(~/.claude/projects/<워크스페이스>/*.jsonl)에 호출마다 토큰이 남는다 (닿 10/21 「사용량 가능?」)
+//   openclaw sessions 의 totalTokens 는 지금 대화 길이(맥락)라 「쓴 양」이 아니다. 기록이 없으면(API 키로 도는 봇) 사용량 칸은 꺼진다
+async function claudeUsage(ws, sessions, recent, short) {
+  const dir = path.join(HOME, '.claude', 'projects', ws.replace(/[^a-zA-Z0-9]/g, '-'));
+  if (!existsSync(dir)) return null;
+  const since = now - 14 * DAY, kst = (t) => new Date(t + 9 * 3600e3).toISOString().slice(0, 10), today = kst(now);
+  const days = {}, per = {}, seen = new Set(), meta = {};
+  const { createInterface } = await import('node:readline');
+  const { createReadStream } = await import('node:fs');
+  for (const f of readdirSync(dir).filter((f) => f.endsWith('.jsonl'))) {
+    const p = path.join(dir, f); try { if (statSync(p).mtimeMs < since) continue; } catch { continue; }
+    for await (const l of createInterface({ input: createReadStream(p) })) {
+      // 어느 대화인가 — OpenClaw 가 첫 메시지에 붙이는 채널 정보(conversation_label · chat_id · topic_id · thread_label)
+      const sid0 = f.slice(0, -6);
+      if (!meta[sid0] && l.includes('conversation_label')) {
+        const g = (k) => (l.match(new RegExp(`${k}\\\\?":\\\\?"([^"\\\\]+)`)) || [])[1] || '';
+        meta[sid0] = { label: g('conversation_label'), chat: g('chat_id'), topic: g('topic_id'), thread: g('thread_label') };
+      }
+      if (!l.includes('"usage"')) continue;
+      let j; try { j = JSON.parse(l); } catch { continue; }
+      const u = j.message?.usage, t = Date.parse(j.timestamp || ''); if (!u || !(t >= since)) continue;
+      const id = `${j.message.id}:${j.requestId || ''}`; if (seen.has(id)) continue; seen.add(id);
+      const d = kst(t), o = (days[d] ||= { d, calls: 0, out: 0, read: 0, s: new Set() });
+      o.calls++; o.out += u.output_tokens || 0; o.read += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); o.s.add(j.sessionId);
+      if (d === today) { const q = (per[j.sessionId] ||= { out: 0, calls: 0 }); q.out += u.output_tokens || 0; q.calls++; }
+    }
+  }
+  const list = Object.values(days).sort((a, b) => a.d.localeCompare(b.d)).map(({ s, ...o }) => ({ ...o, sessions: s.size }));
+  if (!list.length) return null;
+  const top = Object.entries(per).sort((a, b) => b[1].out - a[1].out).slice(0, 5).map(([sid, q]) => {
+    const m = meta[sid] || { label: "", chat: "", topic: "", thread: "" }, ch = (m.chat.match(/^channel:(\w+)/) || [])[1];
+    const key = ch ? (m.topic ? `:slack:channel:${ch.toLowerCase()}:thread:${m.topic}` : `:slack:channel:${ch.toLowerCase()}`) : '';
+    const s = sessions.find((x) => x.sessionId === sid || (key && String(x.key).endsWith(key))), r = s && recent.find((x) => x.key === s.key);
+    const snip = (m.thread.split(/\):\s|:\s/).slice(1).join(': ') || '').replace(/<@[A-Z0-9]+>\s*/g, '').replace(/:[a-z0-9_+-]+:/g, '').replace(/[*_~`]/g, '').trim();
+    return { ...q, title: r?.title || m.label || (s ? short(s.key) : '직접 대화'), snippet: r?.snippet || scrub(snip).slice(0, 90), link: r?.link || '', workspace: r?.workspace || '' };
+  });
+  return { src: 'claude-cli', days: list, top };
 }
 
 // 슬랙 이름표 — 세션 열쇠 agent:<봇>:slack:channel:<채널>:thread:<ts> / slack:direct:<사람>:thread:<ts>
@@ -225,7 +265,7 @@ const got = KIND === 'hermes' ? await hermes() : await openclaw();
 const at = new Date().toISOString();
 const summary = { v: 2, agent: got.agent, kind: got.kind, at, sessions: got.sessions,
   cron: got.cron.sort((a, b) => (b.status === 'error') - (a.status === 'error') || b.enabled - a.enabled || b.lastAt - a.lastAt),
-  skills: got.skills, books: got.books.map((b) => ({ key: b.key, name: b.name, file: b.file, at: b.at })) };
+  skills: got.skills, usage: got.usage || null, books: got.books.map((b) => ({ key: b.key, name: b.name, file: b.file, at: b.at })) };
 // 바뀐 것만 — 지난번에 올린 내용의 지문을 기억해 둔다
 const STATE = path.join(HOME, '.cache', 'nodak-dashboard', `${got.kind}-${got.agent}.json`);
 let prev = {}; try { prev = JSON.parse(readIf(STATE) || '{}'); } catch {}

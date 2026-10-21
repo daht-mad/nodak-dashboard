@@ -56,6 +56,8 @@ a.lk{display:block;color:inherit;text-decoration:none;border-radius:8px}a.lk:hov
 .go{margin-left:auto;background:var(--ink);color:#fff;border:0;border-radius:999px;padding:6px 14px;font-weight:700;font-size:12.5px;white-space:nowrap}
 .lbl{font-size:11.5px;font-weight:700;border-radius:999px;padding:1px 8px;white-space:nowrap}.lbl.ok{background:var(--okbg);color:var(--ok)}.lbl.bad{background:var(--badbg);color:var(--bad)}.lbl.gold{background:#FFF1C9;color:#7a5a00}.lbl.mute{background:#F1EFE9;color:var(--gray)}
 .num{font-weight:700;font-size:14px}
+.ub{display:flex;align-items:flex-end;gap:6px;height:170px;padding-top:18px}.ub-c{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0}.ub-c i{display:block;width:100%;max-width:34px;background:var(--house);border:1.5px solid var(--ink);border-radius:6px 6px 2px 2px}.ub-c i.on{background:var(--ink)}.ub-c em{font-style:normal;font-size:10.5px;color:var(--gray);margin-bottom:3px;white-space:nowrap}.ub-c span{font-size:11px;color:var(--gray);margin-top:5px;white-space:nowrap}.foot{color:var(--gray);font-size:12.5px;line-height:1.6;margin-top:12px}
+@media(max-width:640px){.ub{gap:3px}.ub-c em{display:none}.ub-c span{font-size:10px}.ub-c span .lg{display:none}.ub-c span .sm{display:inline}}.ub-c span b{font-weight:400}.ub-c .sm{display:none}
 .mini{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px}.mini div{background:#F6F4EE;border-radius:10px;padding:9px 11px}.mini small{display:block;color:var(--gray);font-size:11.5px}.mini b{font-size:19px}
 .empty{color:var(--gray);font-size:13px;padding:16px 4px;text-align:center}
 .seg{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}.seg button{border:1.5px solid var(--ink);background:#fff;border-radius:999px;padding:5px 13px;font-weight:700;font-size:13px}.seg button.on{background:var(--ink);color:#fff}
@@ -205,6 +207,22 @@ function talkTab() {
   const b = BOT(); if (!b) return botOff();
   return `<div class="box">${b.sessions.recent.map((s) => lk(s, `<div class="li"><span class="lbl ${s.aborted ? 'bad' : s.status === 'running' ? 'ok' : 'mute'}">${s.aborted ? '멈춤' : s.status === 'running' ? '대화 중' : '끝남'}</span><div class="m">${s.workspace ? `<span class="ws">${esc(s.workspace)}</span>` : ''}${esc(s.title)}<small>${esc(s.snippet || s.kind)}</small></div><span class="w">${ago(s.at)}</span></div>`)).join('')}</div>`;
 }
+// 사용량 — 하루에 봇이 얼마나 썼나 (닿 10/21 「사용량 가능?」). claude-cli 로 도는 봇만 기록이 있다
+const man = (n) => (n >= 1e8 ? `${(n / 1e8).toFixed(1)}억` : n >= 1e4 ? `${Math.round(n / 1e4).toLocaleString()}만` : Number(n || 0).toLocaleString());
+function useTab() {
+  const b = BOT(); if (!b) return botOff();
+  const u = b.usage;
+  if (!u?.days?.length) return '<p class="empty">사용량 기록이 없어. Claude 구독(claude-cli)으로 도는 봇만 하루 사용량이 남아</p>';
+  const days = u.days.slice(-14), t = days.find((d) => d.d === TODAY) || { out: 0, calls: 0, read: 0, sessions: 0 };
+  const past = days.filter((d) => d.d !== TODAY), avg = past.length ? past.reduce((n, d) => n + d.out, 0) / past.length : 0;
+  const max = Math.max(...days.map((d) => d.out), 1);
+  const cmp = avg ? Math.round((t.out / avg) * 100) : 0;
+  return `<div class="mini"><div><small>오늘 봇이 쓴 글</small><b>${man(t.out)}</b></div><div><small>오늘 일한 횟수</small><b>${t.calls.toLocaleString()}번</b></div><div><small>평소보다</small><b>${avg ? `${cmp}%` : '-'}</b></div></div>
+  <div class="box"><h3>${ic('bot')}하루에 쓴 글<span class="r">토큰 · 최근 ${days.length}일</span></h3>
+    <div class="ub">${days.map((d) => `<div class="ub-c" title="${d.d} · 쓴 글 ${man(d.out)} · ${d.calls}번 · 대화 ${d.sessions}개"><em>${man(d.out)}</em><i style="height:${Math.max(3, Math.round((d.out / max) * 100))}%" class="${d.d === TODAY ? 'on' : ''}"></i><span>${d.d === TODAY ? '오늘' : `<b class="lg">${d.d.slice(5).replace('-', '/')}</b><b class="sm">${Number(d.d.slice(8))}</b>`}</span></div>`).join('')}</div></div>
+  <div class="box"><h3>${ic('alert')}오늘 많이 쓴 대화<span class="r">쓴 글 순</span></h3>${(u.top || []).map((s) => lk(s, `<div class="li"><span class="lbl mute">${man(s.out)}</span><div class="m">${s.workspace ? `<span class="ws">${esc(s.workspace)}</span>` : ''}${esc(s.title)}<small>${esc(s.snippet || `${s.calls}번 일함`)}</small></div><span class="w">${s.calls}번</span></div>`)).join('') || '<p class="empty">오늘은 아직 조용해</p>'}</div>
+  <p class="foot">「쓴 글」은 봇이 직접 써 낸 양(출력 토큰)이야. 봇은 매번 앞 대화와 설정 파일을 다시 읽는데, 그 양은 오늘 ${man(t.read)}로 훨씬 커. Claude 구독이면 이 숫자가 돈이 아니라 한도를 먹어.</p>`;
+}
 // 스킬 서랍 — 왼쪽 목록(어디서 온 스킬인지로 나눔) · 오른쪽에 고른 스킬 설명서가 책으로 (닿 10/21 「왼쪽 사이드바에 두고 누르면 우측에 책장처럼」)
 function skillTab() {
   const b = BOT(); if (!b) return botOff();
@@ -285,7 +303,7 @@ function sms() {
 function draw() {
   const h = H(), b = BOT(), fails = b ? b.cron.filter((c) => c.status === 'error') : [];
   document.documentElement.style.setProperty('--house', h.color || '#FFC233');
-  const TABS = [['today', '오늘', workToday], ['cron', '할 일', cronTab, fails.length], ['talk', '대화', talkTab], ['skill', '스킬', skillTab], ['diary', '일기장', diary], ['shelf', '책장', shelf], ...(D.solapi?.off ? [] : [['sms', '문자', sms]])];
+  const TABS = [['today', '오늘', workToday], ['cron', '할 일', cronTab, fails.length], ['talk', '대화', talkTab], ...(BOT()?.usage?.days?.length ? [['use', '사용량', useTab]] : []),['skill', '스킬', skillTab], ['diary', '일기장', diary], ['shelf', '책장', shelf], ...(D.solapi?.off ? [] : [['sms', '문자', sms]])];
   const cur = TABS.find((t) => t[0] === SUB) || TABS[0]; SUB = cur[0]; TAB = SUB;
   const body = cur[2]();
   const alerts = [fails.length && `${esc(botName())}가 맡은 일 ${fails.length}개가 멈췄어`].filter(Boolean);
