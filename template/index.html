@@ -47,6 +47,7 @@ h3 .r{margin-left:auto;font-weight:500;font-size:12.5px;color:var(--gray)}
 .room .tip{position:absolute;top:12px;left:12px;background:rgba(255,255,255,.92);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600}
 .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin-top:14px}
 .box{border:1.5px solid var(--ink);border-radius:14px;padding:12px 14px}.box+.box{margin-top:14px}.cols>.box+.box{margin-top:0}
+span.ws{display:inline-block;font-size:11px;font-weight:600;color:var(--gray);background:#F1EFE9;border-radius:6px;padding:0 6px;margin-right:6px;vertical-align:1px}
 a.lk{display:block;color:inherit;text-decoration:none;border-radius:8px}a.lk:hover{background:#F6F4EE}a.lk+a.lk .li,a.lk+.li,.li+a.lk .li{border-top:1px dashed var(--line)}
 .li{display:flex;gap:10px;align-items:center;padding:8px 0}.li+.li{border-top:1px dashed var(--line)}.li .m{flex:1;min-width:0}.li small{display:block;color:var(--gray);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.li .w{color:var(--gray);font-size:12px;white-space:nowrap}
 .day{display:flex;align-items:center;gap:10px;padding:6px 0}.day+.day{border-top:1px dashed var(--line)}.day .d{width:38px;color:var(--gray);font-size:12px}.day .fs{display:flex;flex-wrap:wrap;gap:3px;flex:1}.day .c{font-size:12px;color:var(--gray)}
@@ -156,10 +157,10 @@ const botName = () => H().botName || BOT()?.agent || '봇';
 function workToday() {
   const b = BOT(); if (!b) return botOff();
   const fails = b.cron.filter((c) => c.status === 'error'), on = b.cron.filter((c) => c.enabled);
-  return `<div class="room" style="aspect-ratio:16/4;background-image:url('${esc(H().room || 'default-room.jpg')}')"><div class="shade"><div><b>${fails.length ? `${esc(botName())}가 맡은 일 ${fails.length}개가 멈췄어` : `${esc(botName())}는 오늘도 잘 일하는 중`}</b><small>기록 ${ago(b.at)} 받음 · 「새로 받기」로 최신</small></div></div></div><div class="mini" style="margin-top:14px"><div><small>오늘 대화</small><b>${b.sessions.today}</b></div><div><small>크론 성공</small><b>${on.filter((c) => c.status === 'ok').length}/${on.length}</b></div><div><small>쓸 수 있는 스킬</small><b>${b.skills.ready}</b></div></div>
+  return `<div class="room" style="aspect-ratio:16/4;background-image:url('${esc(H().room || 'default-room.jpg')}')"><div class="shade"><div><b>${fails.length ? `${esc(botName())}가 맡은 일 ${fails.length}개가 멈췄어` : `${esc(botName())}는 오늘도 잘 일하는 중`}</b><small>기록 ${ago(b.at)} 받음 · 「새로 받기」로 최신</small></div></div></div><div class="mini" style="margin-top:14px"><div><small>오늘 대화</small><b>${b.sessions.today}</b></div><div><small>크론 성공</small><b>${on.filter((c) => c.status === 'ok').length}/${on.length}</b></div><div><small>내 스킬</small><b>${(b.skills.mine||[]).length}</b></div></div>
   <div class="cols">
     <div class="box"><h3>${ic('alert')}멈춘 일<span class="r">${fails.length}개</span></h3>${fails.map((c) => `<div class="li"><span class="lbl bad">멈춤</span><div class="m">${esc(c.name)}<small>${esc(c.note)}</small></div><span class="w">${ago(c.lastAt)}</span></div>`).join('') || '<p class="empty">멈춘 일 없이 잘 돌고 있어</p>'}</div>
-    <div class="box"><h3>${ic('bot')}방금 나눈 대화<span class="r">기록 ${ago(b.at)}</span></h3>${b.sessions.recent.slice(0, 5).map((s) => lk(s, `<div class="li"><span class="lbl ${s.status === 'running' ? 'ok' : 'mute'}">${s.status === 'running' ? '대화 중' : '끝남'}</span><div class="m">${esc(s.title)}<small>${esc(s.snippet || s.kind)}</small></div><span class="w">${ago(s.at)}</span></div>`)).join('')}</div>
+    <div class="box"><h3>${ic('bot')}방금 나눈 대화<span class="r">기록 ${ago(b.at)}</span></h3>${b.sessions.recent.slice(0, 5).map((s) => lk(s, `<div class="li"><span class="lbl ${s.status === 'running' ? 'ok' : 'mute'}">${s.status === 'running' ? '대화 중' : '끝남'}</span><div class="m">${s.workspace ? `<span class="ws">${esc(s.workspace)}</span>` : ''}${esc(s.title)}<small>${esc(s.snippet || s.kind)}</small></div><span class="w">${ago(s.at)}</span></div>`)).join('')}</div>
   </div>`;
 }
 const botOff = () => D.bot?.off ? '<p class="empty">AIRTABLE_TOKEN · AIRTABLE_BASE 를 넣으면 켜져</p>' : D.bot?.error ? `<p class="empty">${esc(D.bot.error)}</p>` : '<p class="empty">아직 봇이 올린 기록이 없어 — 봇에게 「관리실에 내 기록 올려줘」</p>';
@@ -172,7 +173,7 @@ function cronTab() {
 const lk = (s, html) => (s.link ? `<a class="lk" href="${esc(s.link)}" target="_blank" rel="noopener">${html}</a>` : html); // 슬랙 스레드로 바로 (닿 10/21)
 function talkTab() {
   const b = BOT(); if (!b) return botOff();
-  return `<div class="box">${b.sessions.recent.map((s) => lk(s, `<div class="li"><span class="lbl ${s.aborted ? 'bad' : s.status === 'running' ? 'ok' : 'mute'}">${s.aborted ? '멈춤' : s.status === 'running' ? '대화 중' : '끝남'}</span><div class="m">${esc(s.title)}<small>${esc(s.snippet || s.kind)}</small></div><span class="w">${ago(s.at)}</span></div>`)).join('')}</div>`;
+  return `<div class="box">${b.sessions.recent.map((s) => lk(s, `<div class="li"><span class="lbl ${s.aborted ? 'bad' : s.status === 'running' ? 'ok' : 'mute'}">${s.aborted ? '멈춤' : s.status === 'running' ? '대화 중' : '끝남'}</span><div class="m">${s.workspace ? `<span class="ws">${esc(s.workspace)}</span>` : ''}${esc(s.title)}<small>${esc(s.snippet || s.kind)}</small></div><span class="w">${ago(s.at)}</span></div>`)).join('')}</div>`;
 }
 // 스킬 서랍 — 서랍 하나 = 스킬 하나, 열면 SKILL.md 가 책으로 (닿 10/21 「스킬도 누르면 설명서」)
 function skillTab() {
@@ -191,7 +192,7 @@ function skillTab() {
   }
   const names = b.skills.mine || [];
   const recent = new Set([...names].filter((n) => at[n] && Date.now() - Date.parse(at[n]) < 7 * 864e5));
-  return `<p style="color:var(--gray);font-size:13px;margin:0 0 12px">서랍을 열면 그 스킬 설명서가 책으로 펼쳐져 · 쓸 수 있는 스킬 ${b.skills.ready}개</p>
+  return `<p style="color:var(--gray);font-size:13px;margin:0 0 12px">서랍을 열면 그 스킬 설명서가 책으로 펼쳐져 · 내 스킬 ${names.length}개</p>
   <div class="drawers">${names.map((n) => `<button class="drawer" data-skill="${esc(n)}"><span class="knob"></span><b>${esc(n)}</b>${recent.has(n) ? '<span class="lbl gold">새로 배움</span>' : ''}<small>${esc(desc[n] || '')}</small></button>`).join('')}</div>
   ${b.skills.blocked?.length ? `<p style="color:var(--gray);font-size:12.5px;margin:16px 0 6px">준비가 덜 된 스킬 ${b.skills.blocked.length}개</p><div class="chips">${b.skills.blocked.map((s) => `<span title="${esc((s.missing || []).join(', '))}">${esc(s.name)}</span>`).join('')}</div>` : ''}`;
 }

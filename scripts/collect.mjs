@@ -129,13 +129,15 @@ async function slackify(recent, sessions) {
   const sl = cfg.channels?.slack || {};
   const tokenOf = (acc) => { const t = (acc && sl.accounts?.[acc]?.botToken) || sl.botToken || (sl.defaultAccount && sl.accounts?.[sl.defaultAccount]?.botToken); return typeof t === 'string' && t.startsWith('xoxb-') ? t : ''; };
   const call = async (tok, m, q) => { try { const r = await fetch(`https://slack.com/api/${m}?${new URLSearchParams(q)}`, { headers: { Authorization: `Bearer ${tok}` } }); return await r.json(); } catch { return {}; } };
-  const names = {};
+  const names = {}, teams = {};
   for (const r of recent) {
     const m = String(r.key || '').match(/:slack:(channel|direct|group):([a-z0-9]+)(?::thread:([0-9.]+))?/i);
     if (!m) continue;
     const [, kind, idRaw, ts] = m, id = idRaw.toUpperCase();
     const acc = sessions.find((x) => x.key === r.key)?.participants?.[0]?.identity?.accountId;
     const tok = tokenOf(acc); if (!tok) continue;
+    if (!(tok in teams)) { const a = await call(tok, 'team.info', {}); teams[tok] = a.team?.name || (await call(tok, 'auth.test', {})).team || ''; }
+    if (teams[tok]) r.workspace = teams[tok];
     if (kind === 'direct') { r.title = 'DM'; } else {
       const nk = acc + ':' + id;
       if (!(nk in names)) { const i = await call(tok, 'conversations.info', { channel: id }); names[nk] = i.channel?.name ? '#' + i.channel.name : ''; }
