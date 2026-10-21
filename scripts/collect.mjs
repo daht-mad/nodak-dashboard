@@ -96,9 +96,22 @@ async function openclaw() {
   const kj = await oc(['skills', 'list', ...A]);
   const skills = kj.skills || [];
   const mine = skills.filter((s) => s.source !== 'openclaw-bundled');
+  // 스킬 서랍 — 내 스킬 설명서(SKILL.md)를 책처럼 열어 보게 (닿 10/21). 경로는 skills info 로 처음 한 번만 찾고 기억한다
+  const pathCache = path.join(HOME, '.cache', 'nodak-dashboard', 'skill-paths.json');
+  let paths = {}; try { paths = JSON.parse(readIf(pathCache) || '{}'); } catch {}
+  const skillDocs = [];
+  for (const sk of mine.filter((s) => s.eligible && !s.disabled)) {
+    if (!paths[sk.name] || !existsSync(paths[sk.name])) {
+      try { paths[sk.name] = json((await run('openclaw', ['skills', 'info', sk.name, ...A, '--json'], { maxBuffer: 8 << 20 })).stdout).filePath || ''; } catch { paths[sk.name] = ''; }
+    }
+    if (paths[sk.name]) skillDocs.push({ name: sk.name, file: 'SKILL.md', at: mtime(paths[sk.name]), text: readIf(paths[sk.name]) });
+  }
+  try { mkdirSync(path.dirname(pathCache), { recursive: true }); writeFileSync(pathCache, JSON.stringify(paths)); } catch {}
   const skillOut = {
     total: skills.length, ready: skills.filter((s) => s.eligible && !s.disabled).length,
     mine: mine.filter((s) => s.eligible && !s.disabled).map((s) => s.name).sort(),
+    desc: Object.fromEntries(mine.filter((s) => s.eligible && !s.disabled).map((s) => [s.name, scrub(String(s.description || '')).slice(0, 140)])),
+    at: Object.fromEntries(skillDocs.map((d) => [d.name, d.at])),
     blocked: mine.filter((s) => !s.eligible && !s.disabled).map((s) => ({ name: s.name, missing: [...(s.missing?.bins || []), ...(s.missing?.env || [])].slice(0, 3) })),
   };
   const books = WANT_BOOKS.map((k) => ({ key: k, file: `${k}.md`, p: path.join(ws, `${k}.md`) })).filter((b) => existsSync(b.p))
@@ -107,7 +120,7 @@ async function openclaw() {
   const mdir = path.join(ws, 'memory'), since = new Date(now - DAYS * DAY).toISOString().slice(0, 10);
   const diary = (existsSync(mdir) ? readdirSync(mdir) : []).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f) && f.slice(0, 10) >= since)
     .map((f) => { const text = readIf(path.join(mdir, f)); return { date: f.slice(0, 10), heads: heads(text), text }; });
-  return { agent: agent || 'default', kind: 'openclaw', sessions: sessionOut, cron, skills: skillOut, books, diary };
+  return { agent: agent || 'default', kind: 'openclaw', sessions: sessionOut, cron, skills: skillOut, books, diary, skillDocs };
 }
 
 // 슬랙 이름표 — 세션 열쇠 agent:<봇>:slack:channel:<채널>:thread:<ts> / slack:direct:<사람>:thread:<ts>
@@ -174,7 +187,9 @@ async function hermes() {
   });
   const sd = path.join(H, 'skills');
   const names = existsSync(sd) ? readdirSync(sd).filter((d) => existsSync(path.join(sd, d, 'SKILL.md'))).sort() : [];
-  const skillOut = { total: names.length, ready: names.length, mine: names, blocked: [] };
+  const skillDocs = names.map((n) => { const p = path.join(sd, n, 'SKILL.md'); return { name: n, file: 'SKILL.md', at: mtime(p), text: readIf(p) }; });
+  const descOf = (t) => (t.match(/^description:\s*(.+)$/m) || [])[1] || '';
+  const skillOut = { total: names.length, ready: names.length, mine: names, blocked: [], desc: Object.fromEntries(skillDocs.map((d) => [d.name, scrub(descOf(d.text)).slice(0, 140)])), at: Object.fromEntries(skillDocs.map((d) => [d.name, d.at])) };
   // 책장 — SOUL.md · 기억(memories/MEMORY.md, IDENTITY 자리) · 약속(.hermes.md → AGENTS.md) · 집사(memories/USER.md, 기본 안 올림)
   const want = WANT_BOOKS.map((k) => (k === 'IDENTITY' ? 'MEMORY' : k));
   const where = { SOUL: [path.join(H, 'SOUL.md')], MEMORY: [path.join(H, 'memories', 'MEMORY.md')], USER: [path.join(H, 'memories', 'USER.md')],
@@ -187,7 +202,7 @@ async function hermes() {
     date, heads: list.slice(0, 8).map((s) => s.title),
     text: `## 그날 나눈 대화 ${list.length}개\n\n` + list.map((s) => `- ${new Date(s.at + 9 * 3600e3).toISOString().slice(11, 16)} ${s.title}${s.kind ? ` · ${s.kind}` : ''}`).join('\n'),
   }));
-  return { agent: path.basename(H) === '.hermes' ? 'hermes' : path.basename(H), kind: 'hermes', sessions: sessionOut, cron, skills: skillOut, books, diary };
+  return { agent: path.basename(H) === '.hermes' ? 'hermes' : path.basename(H), kind: 'hermes', sessions: sessionOut, cron, skills: skillOut, books, diary, skillDocs };
 }
 
 // ═══ Airtable (기록 쓰기만 — 표·칸은 만들지 않는다)
@@ -212,6 +227,7 @@ const STATE = path.join(HOME, '.cache', 'nodak-dashboard', `${got.kind}-${got.ag
 let prev = {}; try { prev = JSON.parse(readIf(STATE) || '{}'); } catch {}
 const next = { ...prev }, bookRows = [], diaryRows = [];
 for (const b of got.books) { const text = scrub(b.text).slice(0, 95000), k = `${got.agent}:${b.key}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: b.name, 파일: b.file, 고친시각: b.at, 내용: text }); }
+for (const d of got.skillDocs || []) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:skill:${d.name}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: d.name, 파일: d.file, 고친시각: d.at, 내용: text }); }
 for (const d of got.diary) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:${d.date}`, h = sha(text); next[k] = h; if (prev[k] !== h) diaryRows.push({ 열쇠: k, 봇: got.agent, 날짜: d.date, 제목들: scrub(d.heads.join('\n')), 내용: text }); }
 
 const fails = summary.cron.filter((c) => c.status === 'error').length;
