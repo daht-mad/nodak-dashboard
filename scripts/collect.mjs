@@ -80,6 +80,9 @@ async function openclaw() {
     tokensToday: day.reduce((n, s) => n + (s.totalTokens || 0), 0),
     recent: sessions.slice(0, 15).map((s) => ({ title: short(s.key), key: s.key, kind: s.kind || '', status: s.status || '', at: s.updatedAt, tokens: s.totalTokens || 0, aborted: !!s.abortedLastRun })),
   };
+  // 슬랙 세션엔 채널 이름 · 스레드 첫 글 · 링크를 붙인다 (닿 10/21 「누르면 그 슬랙으로, 내용이 보이게」)
+  //   봇 토큰은 openclaw.json 의 그 계정 것 — 이 컴퓨터 안에서만 쓰고 어디에도 올리지 않는다. 세션 15개 × 슬랙 호출 최대 3번
+  await slackify(sessionOut.recent, sessions);
   const cj = await oc(['cron', 'list', '--all']);
   const cron = (cj.jobs || cj || []).filter((j) => !agent || !j.agentId || j.agentId === agent).map((j) => {
     const st = j.state || {};
@@ -105,6 +108,34 @@ async function openclaw() {
   const diary = (existsSync(mdir) ? readdirSync(mdir) : []).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f) && f.slice(0, 10) >= since)
     .map((f) => { const text = readIf(path.join(mdir, f)); return { date: f.slice(0, 10), heads: heads(text), text }; });
   return { agent: agent || 'default', kind: 'openclaw', sessions: sessionOut, cron, skills: skillOut, books, diary };
+}
+
+// 슬랙 이름표 — 세션 열쇠 agent:<봇>:slack:channel:<채널>:thread:<ts> / slack:direct:<사람>:thread:<ts>
+async function slackify(recent, sessions) {
+  let cfg = {}; try { cfg = JSON.parse(readIf(path.join(HOME, '.openclaw', 'openclaw.json')) || '{}'); } catch {}
+  const sl = cfg.channels?.slack || {};
+  const tokenOf = (acc) => { const t = (acc && sl.accounts?.[acc]?.botToken) || sl.botToken || (sl.defaultAccount && sl.accounts?.[sl.defaultAccount]?.botToken); return typeof t === 'string' && t.startsWith('xoxb-') ? t : ''; };
+  const call = async (tok, m, q) => { try { const r = await fetch(`https://slack.com/api/${m}?${new URLSearchParams(q)}`, { headers: { Authorization: `Bearer ${tok}` } }); return await r.json(); } catch { return {}; } };
+  const names = {};
+  for (const r of recent) {
+    const m = String(r.key || '').match(/:slack:(channel|direct|group):([a-z0-9]+)(?::thread:([0-9.]+))?/i);
+    if (!m) continue;
+    const [, kind, idRaw, ts] = m, id = idRaw.toUpperCase();
+    const acc = sessions.find((x) => x.key === r.key)?.participants?.[0]?.identity?.accountId;
+    const tok = tokenOf(acc); if (!tok) continue;
+    if (kind === 'direct') { r.title = 'DM'; } else {
+      const nk = acc + ':' + id;
+      if (!(nk in names)) { const i = await call(tok, 'conversations.info', { channel: id }); names[nk] = i.channel?.name ? '#' + i.channel.name : ''; }
+      if (names[nk]) r.title = names[nk];
+    }
+    if (ts && kind !== 'direct') {
+      const rep = await call(tok, 'conversations.replies', { channel: id, ts, limit: '1', inclusive: 'true' });
+      const t = rep.messages?.[0]?.text;
+      if (t) r.snippet = scrub(t.replace(/<@[A-Z0-9]+>\s*/g, '').replace(/:[a-z0-9_+-]+:/g, '').replace(/[*_~`]/g, '').replace(/<([^|>]+)\|([^>]+)>/g, '$2').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&').replace(/\s+/g, ' ').replace(/^[\s@.~-]+/, '').trim()).slice(0, 90);
+      const pl = await call(tok, 'chat.getPermalink', { channel: id, message_ts: ts });
+      if (pl.permalink) r.link = pl.permalink;
+    }
+  }
 }
 
 // ═══ Hermes — 공식 문서 기준: SOUL.md · memories/ · cron/jobs.json · skills/ · `hermes sessions export`
