@@ -1,20 +1,23 @@
 #!/usr/bin/env node
-// 봇 기록 모으기 — 세션·크론·스킬 요약, 책장(페르소나 파일), 일기장(날짜별 기억)을 내 Airtable 에 올린다
+// 봇 기록 모으기 — 세션·크론·스킬 요약, 책장(페르소나 파일), 일기장(날짜별 기억)을 작업실 폴더의 잠긴 파일(data.lock.json)에 담는다
 // OpenClaw 봇이든 Hermes 봇이든 이 파일 하나. 어느 쪽인지는 저절로 알아낸다(--kind 로 정할 수도 있음)
 //
-//   node collect.mjs             → 모아서 올림 (바뀐 책·일기만 올림)
-//   node collect.mjs --dry       → 올리지 않고 무엇을 올릴지만 보여 줌
+//   node collect.mjs --site <작업실 폴더>            → 모아서 그 폴더의 data.lock.json 에 담음
+//   node collect.mjs --site <작업실 폴더> --deploy   → 담고 바로 vercel --prod (기록이 사이트에 같이 올라감)
+//   node collect.mjs --dry                           → 담지 않고 무엇을 담을지만 보여 줌
 //   옵션: --kind openclaw|hermes · --agent <OpenClaw 봇 id> · --hermes-home <경로> · --days 60(일기 며칠치) · --books SOUL,IDENTITY,AGENTS,USER
 //
-// 표 3개(봇상태·봇책장·봇일기)는 처음 한 번 내 에어테이블 스킬로 만든다 — 칸 모양은 SKILL.md 「표 만들기」
-// .env (봇 워크스페이스 또는 이 폴더) 에 넣을 것: DASH_AIRTABLE_TOKEN · DASH_AIRTABLE_BASE
-// 개인정보: 집사 정보(USER.md)는 기본으로 안 올린다 — 올리려면 --books 에 USER 를 직접 넣는다.
-//   올리기 전에 전화번호·이메일·열쇠·토큰 모양은 가린다(scrub). 그래도 내 Airtable 은 나만 보게 둘 것
-// Airtable 호출: 한 번 돌릴 때 상태 1 + 바뀐 책·일기 10줄마다 1. 바뀐 게 없으면 1번
+// Airtable·표 만들기 없음 (닿 10/21 「에어테이블 없이」). 기록은 작업실 사이트와 함께 배포된다
+// .env (봇 워크스페이스 또는 이 폴더) 에 넣을 것: DASH_PASSWORD (작업실 비번과 같은 값) · DASH_SITE (작업실 폴더, --site 대신)
+// 잠금: data.lock.json 은 작업실 비번으로 잠근다(AES-256-GCM). 사이트에 파일이 그대로 보여도 비번 없인 못 읽는다
+//   비번을 바꾸면 collect 를 다시 돌려 새 비번으로 잠근다
+// 개인정보: 집사 정보(USER.md)는 기본으로 안 담는다 — 담으려면 --books 에 USER 를 직접 넣는다.
+//   담기 전에 전화번호·이메일·열쇠·토큰 모양은 가린다(scrub)
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync, mkdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -32,8 +35,9 @@ for (const f of [flag('--env'), path.join(process.cwd(), '.env'), path.join(HOME
     if (m && process.env[m[1]] == null) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
   }
 }
-const TOKEN = process.env.DASH_AIRTABLE_TOKEN, BASE = process.env.DASH_AIRTABLE_BASE;
-const T = { status: process.env.DASH_TABLE_STATUS || '봇상태', books: process.env.DASH_TABLE_BOOKS || '봇책장', diary: process.env.DASH_TABLE_DIARY || '봇일기' };
+const PW = process.env.DASH_PASSWORD || '';
+const SITE = (flag('--site') || process.env.DASH_SITE || '').replace(/^~/, HOME);
+const DEPLOY = argv.includes('--deploy');
 
 // ── 가리기: 전화번호·이메일·주민번호·열쇠/토큰 모양
 const scrub = (s = '') => String(s)
@@ -260,15 +264,18 @@ async function hermes() {
   return { agent: path.basename(H) === '.hermes' ? 'hermes' : path.basename(H), kind: 'hermes', sessions: sessionOut, cron, skills: skillOut, books, diary, skillDocs };
 }
 
-// ═══ Airtable (기록 쓰기만 — 표·칸은 만들지 않는다)
-async function upsert(table, merge, rows) {
-  for (let i = 0; i < rows.length; i += 10) {
-    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(table)}`, {
-      method: 'PATCH', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ performUpsert: { fieldsToMergeOn: merge }, records: rows.slice(i, i + 10).map((fields) => ({ fields })) }),
-    });
-    if (!r.ok) throw new Error(`${table} 올리기 실패 ${r.status} ${await r.text()} — 표가 없으면 SKILL.md 「표 만들기」부터`);
-  }
+// ═══ 잠긴 파일 — 작업실 비번으로 잠근다. 서버 함수(api/data.js)가 같은 비번으로 연다
+const LOCK = 'data.lock.json';
+const keyOf = (salt) => scryptSync(PW, salt, 32);
+function lock(obj) {
+  const salt = randomBytes(16), iv = randomBytes(12), c = createCipheriv('aes-256-gcm', keyOf(salt), iv);
+  const data = Buffer.concat([c.update(gzipSync(JSON.stringify(obj))), c.final()]);
+  return { v: 1, salt: salt.toString('base64'), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+}
+function unlock(f) {
+  const d = createDecipheriv('aes-256-gcm', keyOf(Buffer.from(f.salt, 'base64')), Buffer.from(f.iv, 'base64'));
+  d.setAuthTag(Buffer.from(f.tag, 'base64'));
+  return JSON.parse(gunzipSync(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()])));
 }
 
 // ═══ 실행
@@ -277,15 +284,15 @@ const at = new Date().toISOString();
 const summary = { v: 2, agent: got.agent, kind: got.kind, at, sessions: got.sessions,
   cron: got.cron.sort((a, b) => (b.status === 'error') - (a.status === 'error') || b.enabled - a.enabled || b.lastAt - a.lastAt),
   skills: got.skills, usage: got.usage || null, books: got.books.map((b) => ({ key: b.key, name: b.name, file: b.file, at: b.at })) };
-// 바뀐 것만 — 지난번에 올린 내용의 지문을 기억해 둔다
+// 바뀐 것 세기 — 지난번에 담은 내용의 지문을 기억해 둔다 (출력 줄에 「바뀜 N」)
 const STATE = path.join(HOME, '.cache', 'nodak-dashboard', `${got.kind}-${got.agent}.json`);
 let prev = {}; try { prev = JSON.parse(readIf(STATE) || '{}'); } catch {}
-const next = { ...prev }, bookRows = [], diaryRows = [];
+const next = {}, bookRows = [], diaryRows = [], allBooks = {}, allDiary = {};
 // 집사 책(USER.md)은 집사가 --books 로 켰을 때만 오고, 그래도 주소·생일·주민번호·전화·메일·여권·계좌 줄은 통째로 뺀다
 const PRIVATE_LINE = /(주소|거주지|생년월일|생일|주민|여권|전화|휴대폰|Phone|Email|이메일|계좌|카드번호|본인인증)/i;
-for (const b of got.books) { const text = scrub(b.key === 'USER' ? b.text.split('\n').filter((l) => !PRIVATE_LINE.test(l)).join('\n') : b.text).slice(0, 95000), k = `${got.agent}:${b.key}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: b.name, 파일: b.file, 고친시각: b.at, 내용: text }); }
-for (const d of got.skillDocs || []) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:skill:${d.name}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: d.name, 파일: d.file, 고친시각: d.at, 내용: text }); }
-for (const d of got.diary) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:${d.date}`, h = sha(text); next[k] = h; if (prev[k] !== h) diaryRows.push({ 열쇠: k, 봇: got.agent, 날짜: d.date, 제목들: scrub(d.heads.join('\n')), 내용: text }); }
+for (const b of got.books) { const text = scrub(b.key === 'USER' ? b.text.split('\n').filter((l) => !PRIVATE_LINE.test(l)).join('\n') : b.text).slice(0, 95000), k = `${got.agent}:${b.key}`, h = sha(text); next[k] = h; allBooks[k] = { 열쇠: k, 봇: got.agent, 책: b.name, 파일: b.file, 고친시각: b.at, 내용: text }; if (prev[k] !== h) bookRows.push(k); }
+for (const d of got.skillDocs || []) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:skill:${d.name}`, h = sha(text); next[k] = h; allBooks[k] = { 열쇠: k, 봇: got.agent, 책: d.name, 파일: d.file, 고친시각: d.at, 내용: text }; if (prev[k] !== h) bookRows.push(k); }
+for (const d of got.diary) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:${d.date}`, h = sha(text); next[k] = h; allDiary[k] = { 열쇠: k, 봇: got.agent, 날짜: d.date, 제목들: scrub(d.heads.join('\n')), 내용: text }; if (prev[k] !== h) diaryRows.push(k); }
 
 const fails = summary.cron.filter((c) => c.status === 'error').length;
 const line = `${got.kind} · ${got.agent} · 세션 오늘 ${summary.sessions.today} · 크론 ${summary.cron.length}개(실패 ${fails}) · 스킬 ${summary.skills.ready} · 책 ${got.books.length}권(바뀜 ${bookRows.length}) · 일기 ${got.diary.length}일(바뀜 ${diaryRows.length})`;
@@ -293,11 +300,27 @@ if (DRY) {
   console.log(line);
   console.log('책:', got.books.map((b) => `${b.name}(${b.file})`).join(', ') || '없음');
   console.log('일기 최근:', got.diary.slice(-3).map((d) => `${d.date} ${d.heads.slice(0, 2).join(' / ')}`).join(' | ') || '없음');
-  console.log('(올리지 않음)'); process.exit(0);
+  console.log('(담지 않음)'); process.exit(0);
 }
-if (!TOKEN || !BASE) { console.error('DASH_AIRTABLE_TOKEN · DASH_AIRTABLE_BASE 가 없어 (.env 에 넣어 줘)'); process.exit(1); }
-await upsert(T.status, ['봇'], [{ 봇: got.agent, 시각: at, 요약: JSON.stringify(summary) }]);
-if (bookRows.length) await upsert(T.books, ['열쇠'], bookRows);
-if (diaryRows.length) await upsert(T.diary, ['열쇠'], diaryRows);
+if (!PW) { console.error('DASH_PASSWORD 가 없어 — 작업실 비번과 같은 값을 .env 에 넣어 줘'); process.exit(1); }
+if (!SITE || !existsSync(path.join(SITE, 'api', 'data.js'))) { console.error('작업실 폴더를 못 찾았어 — --site <폴더> (template 을 복사한 곳, 안에 api/data.js 가 있어야 해)'); process.exit(1); }
+// 봇 여러 마리가 한 작업실을 쓰면 다른 봇 몫은 그대로 두고 이 봇 몫만 갈아 끼운다
+const file = path.join(SITE, LOCK);
+let store = { bots: {}, books: {}, diary: {} };
+if (existsSync(file)) { try { store = unlock(JSON.parse(readFileSync(file, 'utf8'))); } catch { console.error('지난 기록을 못 열었어(비번이 바뀌었나?) — 이 봇 기록으로 새로 담을게'); } }
+const mine = (k) => k.startsWith(`${got.agent}:`);
+store.bots = { ...store.bots, [got.agent]: summary };
+store.books = { ...Object.fromEntries(Object.entries(store.books || {}).filter(([k]) => !mine(k))), ...allBooks };
+store.diary = { ...Object.fromEntries(Object.entries(store.diary || {}).filter(([k]) => !mine(k))), ...allDiary };
+store.at = at;
+writeFileSync(file, JSON.stringify(lock(store)));
 mkdirSync(path.dirname(STATE), { recursive: true }); writeFileSync(STATE, JSON.stringify(next));
-console.log(`올림 · ${line}`);
+const kb = Math.round(statSync(file).size / 1024);
+console.log(`담음 · ${line} · ${LOCK} ${kb}KB`);
+if (DEPLOY) {
+  // 기록은 사이트와 같이 올라간다 — 배포 한 번 = 기록 한 번 새로 고침
+  const r = await run('vercel', ['deploy', '--prod', '--yes'], { cwd: SITE, maxBuffer: 16 << 20 }).catch((e) => ({ stdout: e.stdout || '', stderr: e.stderr || e.message, failed: true }));
+  const url = (String(r.stdout).match(/https:\/\/\S+/g) || []).pop() || '';
+  if (r.failed) { console.error('배포 실패 —', String(r.stderr).trim().split('\n').slice(-3).join(' / ')); process.exit(1); }
+  console.log(`배포 · ${url}`);
+}

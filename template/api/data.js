@@ -1,14 +1,18 @@
 // 내 봇 대시보드 — 서버 함수 하나. 열쇠·토큰은 여기(Vercel 환경변수)에만 있고 화면 코드엔 절대 안 나간다
 // POST /api/data {password}  → 비번이 맞으면 쿠키를 준다 (30일)
 // GET  /api/data             → 쿠키가 맞으면 {village, bot, diary(날짜·제목만), solapi}. ?fresh=1 이면 기억(10분) 무시
-// GET  /api/data?book=<열쇠> · ?day=<열쇠> → 책 한 권 · 일기 하루 본문 (누를 때만 Airtable 1번)
+// GET  /api/data?book=<열쇠> · ?day=<열쇠> → 책 한 권 · 일기 하루 본문
 // 환경변수
 //   DASH_PASSWORD   대시보드 비번 (필수)
 //   VILLAGE_KEY     마을열쇠 — 있으면 우리 집 집색·미니룸·봇 얼굴이 입혀짐(없으면 노닥 노랑) · VILLAGE_URL(기본 https://village.nodak.co.kr)
-//   AIRTABLE_TOKEN · AIRTABLE_BASE — 봇이 올린 내부 기록(표 봇상태·봇책장·봇일기). 있으면 봇·일기장·책장 탭이 켜짐
+//   봇 기록은 Airtable 이 아니라 사이트에 같이 배포된 data.lock.json — 봇이 collect.mjs 로 작업실 비번(DASH_PASSWORD)을 걸어 잠가 둔 파일
 //   SOLAPI_API_KEY · SOLAPI_API_SECRET — 있으면 문자 카드가 켜짐
-// Airtable 호출: 화면을 열 때 마을 4번 + 내 표 2번(상태·일기 목록). 같은 서버가 10분 동안 기억해서 그 사이엔 0번. 책·일기 본문은 누를 때 1번
+// Airtable 호출: 화면을 열 때 마을 4번(우리 집 겉모습)뿐. 같은 서버가 10분 동안 기억해서 그 사이엔 0번
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const E = process.env;
 const VILLAGE_URL = (E.VILLAGE_URL || 'https://village.nodak.co.kr').replace(/\/$/, '');
@@ -41,33 +45,44 @@ async function village() {
   return { at: j.at, parts: j.parts };
 }
 
-const AT = async (table, qs = '') => {
-  const out = []; let offset = '';
-  do {
-    const r = await fetch(`https://api.airtable.com/v0/${E.AIRTABLE_BASE}/${encodeURIComponent(table)}?pageSize=100${qs}${offset ? `&offset=${offset}` : ''}`, { headers: { Authorization: `Bearer ${E.AIRTABLE_TOKEN}` } });
-    if (!r.ok) throw new Error(`Airtable ${table} ${r.status}`);
-    const j = await r.json(); out.push(...j.records); offset = j.offset || '';
-  } while (offset);
-  return out;
-};
-const fq = (xs) => xs.map((x) => `&fields[]=${encodeURIComponent(x)}`).join('');
-const AT_ON = () => E.AIRTABLE_TOKEN && E.AIRTABLE_BASE;
-async function bot() {
-  if (!AT_ON()) return { off: true };
-  const rows = (await AT(E.DASH_TABLE_STATUS || '봇상태')).map((x) => { try { return JSON.parse(x.fields['요약'] || ''); } catch { return null; } }).filter(Boolean);
-  return { bots: rows.sort((a, b) => String(b.at).localeCompare(String(a.at))) };
+// 봇 기록 — data.lock.json 을 비번으로 연다. 배포본 안에서 먼저 찾고, 없으면 같은 사이트 주소에서 받는다
+let lockMemo = null; // {raw, store} — 배포가 바뀌기 전엔 파일이 같으니 한 번만 연다
+async function store(req) {
+  let raw = '';
+  for (const p of [path.join(process.cwd(), 'data.lock.json'), path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data.lock.json')]) {
+    try { raw = readFileSync(p, 'utf8'); break; } catch {}
+  }
+  if (!raw && req) {
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const proto = req.headers['x-forwarded-proto'] || (/^localhost|:\d+$/.test(host || '') ? 'http' : 'https');
+    try { const r = await fetch(`${proto}://${host}/data.lock.json`, { cache: 'no-store' }); if (r.ok) raw = await r.text(); } catch {}
+  }
+  if (!raw) return null;
+  if (lockMemo?.raw === raw) return lockMemo.store;
+  const f = JSON.parse(raw);
+  const d = crypto.createDecipheriv('aes-256-gcm', crypto.scryptSync(E.DASH_PASSWORD, Buffer.from(f.salt, 'base64'), 32), Buffer.from(f.iv, 'base64'));
+  d.setAuthTag(Buffer.from(f.tag, 'base64'));
+  let st; try { st = JSON.parse(gunzipSync(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]))); }
+  catch { throw new Error('기록 파일이 안 열려 — 봇의 DASH_PASSWORD 가 작업실 비번과 같은지 보고 collect 를 다시 돌려 줘'); }
+  lockMemo = { raw, store: st };
+  return st;
+}
+async function bot(req) {
+  const st = await store(req);
+  if (!st) return { off: true };
+  return { bots: Object.values(st.bots || {}).sort((a, b) => String(b.at).localeCompare(String(a.at))) };
 }
 // 일기 목록 — 날짜·제목만 (본문은 누를 때)
-async function diaryList() {
-  if (!AT_ON()) return { off: true };
-  const rows = await AT(E.DASH_TABLE_DIARY || '봇일기', fq(['열쇠', '봇', '날짜', '제목들']));
-  return { days: rows.map((x) => ({ key: x.fields['열쇠'], bot: x.fields['봇'], date: x.fields['날짜'], heads: String(x.fields['제목들'] || '').split('\n').filter(Boolean) })).sort((a, b) => String(b.date).localeCompare(String(a.date))) };
+async function diaryList(req) {
+  const st = await store(req);
+  if (!st) return { off: true };
+  return { days: Object.values(st.diary || {}).map((x) => ({ key: x['열쇠'], bot: x['봇'], date: x['날짜'], heads: String(x['제목들'] || '').split('\n').filter(Boolean) })).sort((a, b) => String(b.date).localeCompare(String(a.date))) };
 }
-async function one(table, key) {
-  if (!AT_ON()) return { off: true };
-  const f = encodeURIComponent(`{열쇠}='${String(key).replace(/'/g, "\\'")}'`);
-  const [x] = await AT(table, `&maxRecords=1&filterByFormula=${f}`);
-  return x ? { key, ...x.fields } : { error: '없어' };
+async function one(kind, key, req) {
+  const st = await store(req);
+  if (!st) return { off: true };
+  const x = st[kind]?.[key];
+  return x ? { key, ...x } : { error: '없어' };
 }
 
 async function solapi() {
@@ -106,11 +121,11 @@ export default async function handler(req, res) {
   }
   if (!same(cookieOf(req).dash || '', sign())) return send(res, 401, { error: '비번이 필요해' });
   const q = new URL(req.url || '/', 'http://x').searchParams;
-  if (q.get('book')) return send(res, 200, await one(E.DASH_TABLE_BOOKS || '봇책장', q.get('book')).catch((e) => ({ error: e.message })));
-  if (q.get('day')) return send(res, 200, await one(E.DASH_TABLE_DIARY || '봇일기', q.get('day')).catch((e) => ({ error: e.message })));
+  if (q.get('book')) return send(res, 200, await one('books', q.get('book'), req).catch((e) => ({ error: e.message })));
+  if (q.get('day')) return send(res, 200, await one('diary', q.get('day'), req).catch((e) => ({ error: e.message })));
   const fresh = q.get('fresh') === '1';
   if (!fresh && memo && Date.now() - memo.at < KEEP_MS) return send(res, 200, { ...memo.data, cached: true });
-  const [v, b, dl, s] = await Promise.all([village(), bot(), diaryList(), solapi()].map((p) => p.catch((e) => ({ error: e.message }))));
+  const [v, b, dl, s] = await Promise.all([village(), bot(req), diaryList(req), solapi()].map((p) => p.catch((e) => ({ error: e.message }))));
   const data = { at: new Date().toISOString(), village: v, bot: b, diary: dl, solapi: s };
   memo = { at: Date.now(), data };
   return send(res, 200, data);
