@@ -112,6 +112,8 @@ async function openclaw() {
     mine: mine.filter((s) => s.eligible && !s.disabled).map((s) => s.name).sort(),
     desc: Object.fromEntries(mine.filter((s) => s.eligible && !s.disabled).map((s) => [s.name, scrub(String(s.description || '')).slice(0, 140)])),
     at: Object.fromEntries(skillDocs.map((d) => [d.name, d.at])),
+    // 어디서 온 스킬인가 — 서랍장을 칸으로 나눈다 (닿 10/21 「영어로 된 기본 스킬들은 뭐야」)
+    from: Object.fromEntries(mine.filter((s) => s.eligible && !s.disabled).map((s) => { const p = paths[s.name] || ''; return [s.name, s.source === 'openclaw-custodian' || p.includes('custodian-skills') ? 'openclaw' : p.includes('/.claude/skills/') ? 'claude' : p.includes('/plugin-skills/') ? 'plugin' : 'mine']; })),
     blocked: mine.filter((s) => !s.eligible && !s.disabled).map((s) => ({ name: s.name, missing: [...(s.missing?.bins || []), ...(s.missing?.env || [])].slice(0, 3) })),
   };
   const books = WANT_BOOKS.map((k) => ({ key: k, file: `${k}.md`, p: path.join(ws, `${k}.md`) })).filter((b) => existsSync(b.p))

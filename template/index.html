@@ -193,7 +193,7 @@ function skillTab() {
   const names = b.skills.mine || [];
   const recent = new Set([...names].filter((n) => at[n] && Date.now() - Date.parse(at[n]) < 7 * 864e5));
   return `<p style="color:var(--gray);font-size:13px;margin:0 0 12px">서랍을 열면 그 스킬 설명서가 책으로 펼쳐져 · 내 스킬 ${names.length}개</p>
-  <div class="drawers">${names.map((n) => `<button class="drawer" data-skill="${esc(n)}"><span class="knob"></span><b>${esc(n)}</b>${recent.has(n) ? '<span class="lbl gold">새로 배움</span>' : ''}<small>${esc(desc[n] || '')}</small></button>`).join('')}</div>
+  ${[['mine', '내가 들인 스킬', '집사랑 봇이 만들거나 받아 온 것'], ['claude', 'Claude에서 온 스킬', 'Claude 계정·Claude Code 쪽 기본 스킬(문서·브라우저 등)'], ['plugin', '플러그인 스킬', '채널 플러그인이 같이 깐 것'], ['openclaw', 'OpenClaw 관리 스킬', 'OpenClaw가 자기 설정을 돌보려고 넣어 둔 것']].map(([g, t, s]) => { const ns = names.filter((n) => ((b.skills.from || {})[n] || 'mine') === g); return ns.length ? `<h3 style="margin-top:${g === 'mine' ? 0 : 22}px">${t}<span class="r">${ns.length}개 · ${s}</span></h3><div class="drawers">${ns.map((n) => `<button class="drawer" data-skill="${esc(n)}"><span class="knob"></span><b>${esc(n)}</b>${recent.has(n) ? '<span class="lbl gold">새로 배움</span>' : ''}<small>${esc(desc[n] || '')}</small></button>`).join('')}</div>` : ''; }).join('')}
   ${b.skills.blocked?.length ? `<p style="color:var(--gray);font-size:12.5px;margin:16px 0 6px">준비가 덜 된 스킬 ${b.skills.blocked.length}개</p><div class="chips">${b.skills.blocked.map((s) => `<span title="${esc((s.missing || []).join(', '))}">${esc(s.name)}</span>`).join('')}</div>` : ''}`;
 }
 function shelf() {
