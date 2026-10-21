@@ -57,7 +57,7 @@ let KIND = flag('--kind');
 if (!KIND) KIND = (await has('openclaw')) ? 'openclaw' : existsSync(HERMES_HOME) || (await has('hermes')) ? 'hermes' : '';
 if (!KIND) { console.error('OpenClaw 도 Hermes 도 못 찾았어. --kind openclaw|hermes 로 알려 줘'); process.exit(1); }
 const DAYS = Number(flag('--days', '60'));
-const WANT_BOOKS = flag('--books', 'SOUL,IDENTITY,AGENTS').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+const WANT_BOOKS = flag('--books', process.env.DASH_BOOKS || 'SOUL,IDENTITY,AGENTS').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
 const BOOK_NAME = { SOUL: '영혼', IDENTITY: '이름표', AGENTS: '약속', USER: '집사', MEMORY: '기억', TOOLS: '연장통' };
 
 // ═══ OpenClaw
@@ -228,7 +228,9 @@ const summary = { v: 2, agent: got.agent, kind: got.kind, at, sessions: got.sess
 const STATE = path.join(HOME, '.cache', 'nodak-dashboard', `${got.kind}-${got.agent}.json`);
 let prev = {}; try { prev = JSON.parse(readIf(STATE) || '{}'); } catch {}
 const next = { ...prev }, bookRows = [], diaryRows = [];
-for (const b of got.books) { const text = scrub(b.text).slice(0, 95000), k = `${got.agent}:${b.key}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: b.name, 파일: b.file, 고친시각: b.at, 내용: text }); }
+// 집사 책(USER.md)은 집사가 --books 로 켰을 때만 오고, 그래도 주소·생일·주민번호·전화·메일·여권·계좌 줄은 통째로 뺀다
+const PRIVATE_LINE = /(주소|거주지|생년월일|생일|주민|여권|전화|휴대폰|Phone|Email|이메일|계좌|카드번호|본인인증)/i;
+for (const b of got.books) { const text = scrub(b.key === 'USER' ? b.text.split('\n').filter((l) => !PRIVATE_LINE.test(l)).join('\n') : b.text).slice(0, 95000), k = `${got.agent}:${b.key}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: b.name, 파일: b.file, 고친시각: b.at, 내용: text }); }
 for (const d of got.skillDocs || []) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:skill:${d.name}`, h = sha(text); next[k] = h; if (prev[k] !== h) bookRows.push({ 열쇠: k, 봇: got.agent, 책: d.name, 파일: d.file, 고친시각: d.at, 내용: text }); }
 for (const d of got.diary) { const text = scrub(d.text).slice(0, 95000), k = `${got.agent}:${d.date}`, h = sha(text); next[k] = h; if (prev[k] !== h) diaryRows.push({ 열쇠: k, 봇: got.agent, 날짜: d.date, 제목들: scrub(d.heads.join('\n')), 내용: text }); }
 
